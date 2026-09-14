@@ -2,10 +2,9 @@
 
 ## Unreleased
 
-* Reject question-type validation errors before importing a new version, preserving the existing
-  question version instead of publishing invalid content as Ready.
-* Add an explicit override to import repairable validation errors as a draft for repair, retaining
-  diagnostics. Unreadable structures and save failures are not bypassed.
+* Reject question-type save notices by default in the upload form, with an explicit override.
+* Preserve permissive behavior for existing API callers and leave version status unchanged.
+* Roll back failed saves, including false return values, before committing or emitting an import event.
 
 ## Changes in version 1.5.1
 

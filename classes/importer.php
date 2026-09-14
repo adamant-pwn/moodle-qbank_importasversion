@@ -45,7 +45,8 @@ class importer extends qformat_xml {
      * @param qformat_xml $qformat an instance of
      * @param question_definition $question the question to add a version to.
      * @param string $importedquestionfile filename of the file to import.
-     * @param bool $force Import repairable validation failures as a draft version, retaining diagnostics.
+     * @param bool $force Allow save notices. Defaults to true for existing callers;
+     *     the upload form passes false by default.
      * @return object|boolean Either a simple object with error and/or notice properties when there are issues
      * or true on success.
      */
@@ -53,7 +54,7 @@ class importer extends qformat_xml {
         qformat_xml $qformat,
         question_definition $question,
         string $importedquestionfile,
-        bool $force = false
+        bool $force = true
     ) {
         global $USER, $DB;
 
@@ -86,24 +87,6 @@ class importer extends qformat_xml {
         // For now, single question.
         $importedquestion = $importedquestions[0];
 
-        // A repairable question-type diagnostic may also increment the format's error count.
-        // Any additional parser error means the input was not read completely and cannot be forced.
-        $validationerrorcount = !empty($importedquestion->validationerrors) ? 1 : 0;
-        if ($qformat->importerrors > $validationerrorcount) {
-            $result = new stdClass();
-            $result->error = get_string('importparseerrors', 'qbank_importasversion');
-            return $result;
-        }
-
-        // Some question types retain invalid XML with diagnostics so it can be repaired after a
-        // normal import. Do not publish that content as the Ready version of an existing question.
-        // Reject before creating records, importing files, or triggering an import event.
-        if (!empty($importedquestion->validationerrors) && (!$force || !empty($importedquestion->structuralerror))) {
-            $result = new stdClass();
-            $result->error = $importedquestion->validationerrors;
-            return $result;
-        }
-
         $transaction = $DB->start_delegated_transaction();
 
         $count++;
@@ -133,9 +116,7 @@ class importer extends qformat_xml {
         $questionversion->questionbankentryid = $question->questionbankentryid;
         $questionversion->questionid = $newquestion->id;
         $questionversion->version = get_next_version($question->questionbankentryid);
-        $questionversion->status = !empty($importedquestion->validationerrors)
-            ? question_version_status::QUESTION_STATUS_DRAFT
-            : question_version_status::QUESTION_STATUS_READY;
+        $questionversion->status = question_version_status::QUESTION_STATUS_READY; // TODO: Give an option on the form.
         $questionversion->id = $DB->insert_record('question_versions', $questionversion);
 
         if (isset($newquestion->questiontextitemid)) {
@@ -181,8 +162,6 @@ class importer extends qformat_xml {
             }
         }
         $DB->update_record('question', $newquestion);
-
-        $qformat->questionids[] = $newquestion->id;
 
         // Now to save all the answers and type-specific options.
 
@@ -241,6 +220,11 @@ class importer extends qformat_xml {
             }
         }
 
+        // A rejected notice must be reported as a failure, not as a successful import with warnings.
+        if (!$force && !empty($result->notice) && empty($result->error)) {
+            $result->error = $result->notice;
+        }
+
         if (!empty($result->error)) {
             // Can't use $transaction->rollback(); since it requires an exception,
             // and I don't want to rewrite this code to change the error handling now.
@@ -259,18 +243,12 @@ class importer extends qformat_xml {
         ])->trigger();
 
         $transaction->allow_commit();
+        $qformat->questionids[] = $newquestion->id;
 
         if ($result === null) {
             // Some question types don't have a return value when saving options.
             // If it hasn't thrown an Exception then it's fine.
             $result = true;
-        }
-        if ($force && !empty($importedquestion->validationerrors)) {
-            if ($result === true) {
-                $result = new stdClass();
-            }
-            $result->notice = get_string('invalidimportedfordraftrepair', 'qbank_importasversion') . '<br>' .
-                $importedquestion->validationerrors;
         }
 
         return $result;
