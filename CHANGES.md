@@ -3,7 +3,8 @@
 ## Unreleased
 
 * Reject question-type save notices by default in the upload form, with an explicit override.
-* Preserve permissive behavior for existing API callers and leave version status unchanged.
+* Add an independent Import as Draft option for review or repair; it does not bypass validation.
+* Preserve permissive imports and Ready status for existing API callers by default.
 * Roll back failed saves, including false return values, before committing or emitting an import event.
 
 ## Changes in version 1.5.1

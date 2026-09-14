@@ -47,6 +47,7 @@ class importer extends qformat_xml {
      * @param string $importedquestionfile filename of the file to import.
      * @param bool $force Allow save notices. Defaults to true for existing callers;
      *     the upload form passes false by default.
+     * @param bool $draft Import as Draft, independently of save notices. Defaults to Ready for compatibility.
      * @return object|boolean Either a simple object with error and/or notice properties when there are issues
      * or true on success.
      */
@@ -54,7 +55,8 @@ class importer extends qformat_xml {
         qformat_xml $qformat,
         question_definition $question,
         string $importedquestionfile,
-        bool $force = true
+        bool $force = true,
+        bool $draft = false
     ) {
         global $USER, $DB;
 
@@ -116,7 +118,9 @@ class importer extends qformat_xml {
         $questionversion->questionbankentryid = $question->questionbankentryid;
         $questionversion->questionid = $newquestion->id;
         $questionversion->version = get_next_version($question->questionbankentryid);
-        $questionversion->status = question_version_status::QUESTION_STATUS_READY; // TODO: Give an option on the form.
+        $questionversion->status = $draft
+            ? question_version_status::QUESTION_STATUS_DRAFT
+            : question_version_status::QUESTION_STATUS_READY;
         $questionversion->id = $DB->insert_record('question_versions', $questionversion);
 
         if (isset($newquestion->questiontextitemid)) {

@@ -36,8 +36,9 @@ final class importer_test extends \advanced_testcase {
      * @param mixed $outcome Question-type save result.
      * @param bool|null $force Null exercises the legacy three-argument call.
      * @param bool $committed Whether the import should commit.
+     * @param bool $draft Whether the new version should be Draft.
      */
-    public function test_save_result_policy($outcome, ?bool $force, bool $committed): void {
+    public function test_save_result_policy($outcome, ?bool $force, bool $committed, bool $draft = false): void {
         global $DB;
         $this->resetAfterTest();
         $this->preventResetByRollback();
@@ -62,7 +63,8 @@ final class importer_test extends \advanced_testcase {
         try {
             $file = __DIR__ . '/fixtures/edited-true-false-question.xml';
             $result = $force === null ? importer::import_file($format, $question, $file)
-                : importer::import_file($format, $question, $file, $force);
+                : ($draft ? importer::import_file($format, $question, $file, $force, true)
+                    : importer::import_file($format, $question, $file, $force));
         } finally {
             $property->setValue(null, $original);
         }
@@ -71,7 +73,7 @@ final class importer_test extends \advanced_testcase {
             $this->assertEmpty($result->error ?? null);
             $this->assertCount(count($before) + 1, $after);
             $new = array_values(array_diff_key($after, $before));
-            $this->assertEquals('ready', $new[0]->status);
+            $this->assertEquals($draft ? 'draft' : 'ready', $new[0]->status);
             $this->assertEquals([$new[0]->questionid], $format->questionids);
             $events = array_filter($sink->get_events(), static function ($event) {
                 return $event instanceof \qbank_importasversion\event\question_version_imported;
@@ -111,13 +113,21 @@ final class importer_test extends \advanced_testcase {
                 $committed = $outcome !== false && empty($outcome->error)
                     && ($force !== false || empty($outcome->notice));
                 $cases[$policy . ' ' . $name] = [$outcome, $force, $committed];
+                if ($force !== null) {
+                    $cases[$policy . ' draft ' . $name] = [$outcome, $force, $committed, true];
+                }
             }
         }
         return $cases;
     }
 
-    /** A valid non-STACK question still imports through the real save implementation. */
-    public function test_valid_question_imports_without_force(): void {
+    /**
+     * A valid question can be Ready or Draft without enabling the warning override.
+     *
+     * @dataProvider draft_choices
+     * @param bool $draft Whether to create a Draft version.
+     */
+    public function test_valid_question_imports_without_force(bool $draft): void {
         global $DB;
         $this->resetAfterTest();
         $this->setAdminUser();
@@ -128,14 +138,24 @@ final class importer_test extends \advanced_testcase {
         $before = $DB->get_records('question_versions');
         $format = new \qformat_xml();
         $format->displayprogress = false;
-        $result = importer::import_file($format, $question, __DIR__ . '/fixtures/edited-true-false-question.xml', false);
+        $result = importer::import_file($format, $question, __DIR__ . '/fixtures/edited-true-false-question.xml', false, $draft);
         $this->assertEmpty($result->error ?? null);
         $after = $DB->get_records('question_versions');
         $new = array_values(array_diff_key($after, $before));
         $this->assertCount(1, $new);
-        $this->assertEquals('ready', $new[0]->status);
+        $this->assertEquals($draft ? 'draft' : 'ready', $new[0]->status);
         $loaded = \question_bank::load_question($new[0]->questionid);
         $this->assertInstanceOf(\qtype_truefalse_question::class, $loaded);
+        $available = \question_bank::get_finder()->get_questions_from_categories([$category->id], '');
+        $this->assertEquals([$draft ? $question->id : $new[0]->questionid], array_values($available));
+        foreach ($before as $id => $version) {
+            $this->assertEquals($version, $after[$id]);
+        }
+    }
+
+    /** @return array Explicit publication choices. */
+    public static function draft_choices(): array {
+        return [[false], [true]];
     }
 
     /**
@@ -144,8 +164,9 @@ final class importer_test extends \advanced_testcase {
      * @dataProvider stack_input_types
      * @param string $type STACK input type.
      * @param bool $force Whether to allow question-type save notices.
+     * @param bool $draft Whether the new version should be Draft.
      */
-    public function test_stack_missing_validation_obeys_force(string $type, bool $force = false): void {
+    public function test_stack_missing_validation_obeys_force(string $type, bool $force = false, bool $draft = false): void {
         global $DB, $CFG, $PAGE;
         if (!is_dir($CFG->dirroot . '/question/type/stack')) {
             $this->markTestSkipped('Optional integration test requires STACK.');
@@ -174,12 +195,14 @@ final class importer_test extends \advanced_testcase {
         $format->displayprogress = false;
         $before = $DB->get_records('question_versions', ['questionbankentryid' => $question->questionbankentryid]);
         $questions = $DB->count_records('question');
-        $result = importer::import_file($format, $question, $file, $force);
+        $result = importer::import_file($format, $question, $file, $force, $draft);
         $after = $DB->get_records('question_versions', ['questionbankentryid' => $question->questionbankentryid]);
         if ($force) {
             $newversions = array_values(array_diff_key($after, $before));
             $this->assertCount(1, $newversions);
-            $this->assertEquals('ready', $newversions[0]->status);
+            $this->assertEquals($draft ? 'draft' : 'ready', $newversions[0]->status);
+            $available = \question_bank::get_finder()->get_questions_from_categories([$category->id], '');
+            $this->assertEquals([$draft ? $question->id : $newversions[0]->questionid], array_values($available));
             $this->assertEquals(1, $DB->get_field(
                 'qtype_stack_options',
                 'isbroken',
@@ -209,6 +232,7 @@ final class importer_test extends \advanced_testcase {
             'checkbox' => ['checkbox'],
             'dropdown' => ['dropdown'],
             'dropdown forced' => ['dropdown', true],
+            'dropdown forced draft' => ['dropdown', true, true],
             'equiv' => ['equiv'],
             'freetext' => ['freetext'],
             'geogebra' => ['geogebra'],

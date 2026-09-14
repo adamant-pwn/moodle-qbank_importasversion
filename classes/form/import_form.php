@@ -60,6 +60,11 @@ class import_form extends moodleform {
         $mform->setDefault('force', 0);
         $mform->setType('force', PARAM_BOOL);
 
+        $mform->addElement('advcheckbox', 'draft', get_string('importasdraft', 'qbank_importasversion'));
+        $mform->addHelpButton('draft', 'importasdraft', 'qbank_importasversion');
+        $mform->setDefault('draft', 0);
+        $mform->setType('draft', PARAM_BOOL);
+
         $mform->addElement('hidden', 'id');
         $mform->setType('id', PARAM_INT);
 

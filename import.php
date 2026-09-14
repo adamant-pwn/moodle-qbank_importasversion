@@ -109,7 +109,13 @@ if ($fromform = $importform->get_data()) {
         throw new moodle_exception('cannotimport', '', $thispageurl->out());
     }
 
-    $result = qbank_importasversion\importer::import_file($qformat, $question, $importfile, !empty($fromform->force));
+    $result = qbank_importasversion\importer::import_file(
+        $qformat,
+        $question,
+        $importfile,
+        !empty($fromform->force),
+        !empty($fromform->draft)
+    );
 
     // In case anything needs to be done after.
     if (!$qformat->importpostprocess()) {
