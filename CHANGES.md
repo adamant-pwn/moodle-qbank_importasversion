@@ -3,7 +3,7 @@
 ## Unreleased
 
 * Reject question-type save notices by default in the upload form, with an explicit override.
-* Add an independent Import as Draft option for review or repair; it does not bypass validation.
+* The form override explicitly imports versions with warnings as Draft; imports without warnings remain Ready.
 * Preserve permissive imports and Ready status for existing API callers by default.
 * Roll back failed saves, including false return values, before committing or emitting an import event.
 

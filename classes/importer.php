@@ -47,7 +47,7 @@ class importer extends qformat_xml {
      * @param string $importedquestionfile filename of the file to import.
      * @param bool $force Allow save notices. Defaults to true for existing callers;
      *     the upload form passes false by default.
-     * @param bool $draft Import as Draft, independently of save notices. Defaults to Ready for compatibility.
+     * @param bool $draftonnotice Save retained warnings as Draft. Defaults to false for existing callers.
      * @return object|boolean Either a simple object with error and/or notice properties when there are issues
      * or true on success.
      */
@@ -56,7 +56,7 @@ class importer extends qformat_xml {
         question_definition $question,
         string $importedquestionfile,
         bool $force = true,
-        bool $draft = false
+        bool $draftonnotice = false
     ) {
         global $USER, $DB;
 
@@ -118,9 +118,7 @@ class importer extends qformat_xml {
         $questionversion->questionbankentryid = $question->questionbankentryid;
         $questionversion->questionid = $newquestion->id;
         $questionversion->version = get_next_version($question->questionbankentryid);
-        $questionversion->status = $draft
-            ? question_version_status::QUESTION_STATUS_DRAFT
-            : question_version_status::QUESTION_STATUS_READY;
+        $questionversion->status = question_version_status::QUESTION_STATUS_READY;
         $questionversion->id = $DB->insert_record('question_versions', $questionversion);
 
         if (isset($newquestion->questiontextitemid)) {
@@ -234,6 +232,16 @@ class importer extends qformat_xml {
             // and I don't want to rewrite this code to change the error handling now.
             $DB->force_transaction_rollback();
             return $result;
+        }
+
+        if ($draftonnotice && !empty($result->notice)) {
+            $DB->set_field(
+                'question_versions',
+                'status',
+                question_version_status::QUESTION_STATUS_DRAFT,
+                ['id' => $questionversion->id]
+            );
+            $result->notice = get_string('importedwithwarningsasdraft', 'qbank_importasversion') . '<br>' . $result->notice;
         }
 
         question_version_imported::create([

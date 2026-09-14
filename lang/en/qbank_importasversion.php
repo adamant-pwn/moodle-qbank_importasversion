@@ -26,12 +26,11 @@
 defined('MOODLE_INTERNAL') || die();
 
 $string['event:question_version_imported'] = 'Question version imported';
-$string['forceimport'] = 'Import despite question-type warnings';
-$string['forceimport_help'] = 'By default, a question-type save warning stops this upload. Enable this option to import a new version despite warnings. The warning remains visible. Use Import as Draft separately to keep the new version out of quiz use. Save errors cannot be overridden.';
-$string['importasdraft'] = 'Import as Draft';
-$string['importasdraft_help'] = 'Save the new version as Draft instead of Ready, leaving existing versions unchanged. This does not bypass validation: to retain a version with question-type warnings, also enable Import despite question-type warnings. Review and mark the version Ready separately when it is suitable for use.';
+$string['forceimport'] = 'Import with warnings as Draft';
+$string['forceimport_help'] = 'By default, question-type save warnings stop this upload. Enable this option to retain a version with warnings as Draft for review or repair, leaving existing versions unchanged. Imports without warnings are still saved as Ready. Save errors cannot be overridden.';
 $string['importasversion'] = 'Import a new version';
 $string['importasversion_help'] = 'Imports a question from a file but creates a new version of an existing question';
+$string['importedwithwarningsasdraft'] = 'The new version was imported as Draft for review or repair.';
 $string['importerror'] = 'Error while importing the file';
 $string['importnewversionofx'] = 'Import a new version of question {$a}';
 $string['pluginname'] = 'Import question as new version';

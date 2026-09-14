@@ -114,7 +114,7 @@ if ($fromform = $importform->get_data()) {
         $question,
         $importfile,
         !empty($fromform->force),
-        !empty($fromform->draft)
+        true // Retained warnings from this form are explicitly imported as Draft.
     );
 
     // In case anything needs to be done after.
