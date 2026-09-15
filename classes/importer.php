@@ -61,6 +61,9 @@ class importer extends qformat_xml {
         global $USER, $DB;
 
         $context = context::instance_by_id($question->contextid);
+        $contexts = $qformat->contexts ?? [];
+        $contexts[] = $context;
+        $qformat->setContexts($contexts);
 
         // STAGE 1: Parse the file.
         if (! $importedlines = $qformat->readdata($importedquestionfile)) {
@@ -176,50 +179,15 @@ class importer extends qformat_xml {
         }
 
         if (core_tag_tag::is_enabled('core_question', 'question')) {
-            // Is the current context we're importing in a course context?
-            $importingcontext = $context;
-            $importingcoursecontext = $importingcontext->get_course_context(false);
-            $isimportingcontextcourseoractivity = !empty($importingcoursecontext);
-
-            if (!empty($newquestion->coursetags)) {
-                if ($isimportingcontextcourseoractivity) {
-                    $mergedtags = array_merge($newquestion->coursetags, $newquestion->tags);
-
-                    core_tag_tag::set_item_tags(
-                        'core_question',
-                        'question',
-                        $newquestion->id,
-                        $newquestion->context,
-                        $mergedtags
-                    );
-                } else {
-                    core_tag_tag::set_item_tags(
-                        'core_question',
-                        'question',
-                        $newquestion->id,
-                        context_course::instance($qformat->course->id),
-                        $newquestion->coursetags
-                    );
-
-                    if (!empty($newquestion->tags)) {
-                        core_tag_tag::set_item_tags(
-                            'core_question',
-                            'question',
-                            $newquestion->id,
-                            $importingcontext,
-                            $newquestion->tags
-                        );
-                    }
-                }
-            } else if (!empty($newquestion->tags)) {
-                core_tag_tag::set_item_tags(
-                    'core_question',
-                    'question',
-                    $newquestion->id,
-                    $newquestion->context,
-                    $newquestion->tags
-                );
-            }
+            // Course tags on questions are deprecated; merge them into the question tags.
+            $mergedtags = array_merge($newquestion->coursetags ?? [], $newquestion->tags ?? []);
+            core_tag_tag::set_item_tags(
+                'core_question',
+                'question',
+                $newquestion->id,
+                $newquestion->context,
+                $mergedtags
+            );
         }
 
         // A rejected notice must be reported as a failure, not as a successful import with warnings.
