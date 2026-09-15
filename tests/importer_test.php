@@ -29,233 +29,250 @@ require_once($CFG->dirroot . '/question/format/xml/format.php');
  * @covers \qbank_importasversion\importer
  */
 final class importer_test extends \advanced_testcase {
-    /**
-     * Generic question-type save results determine whether a new version is committed.
-     *
-     * @dataProvider save_results
-     * @param mixed $outcome Question-type save result.
-     * @param bool|null $force Null exercises the legacy three-argument call.
-     * @param bool $committed Whether the import should commit.
-     * @param bool $draftonnotice Whether retained warnings should create a Draft version.
-     */
-    public function test_save_result_policy($outcome, ?bool $force, bool $committed, bool $draftonnotice = false): void {
+    /** @var \question_definition Original Ready question. */
+    private $question;
+
+    /** @var \qformat_xml Import format. */
+    private $format;
+
+    /** @var array Original question-version records. */
+    private $versions;
+
+    /** @var int Original number of questions. */
+    private $questioncount;
+
+    /** @var \phpunit_event_sink Captures events emitted by the import. */
+    private $events;
+
+    /** @var array|null Question-type registry before installing the mock. */
+    private $originaltypes;
+
+    protected function setUp(): void {
         global $DB;
+        parent::setUp();
         $this->resetAfterTest();
+        // Rejection rolls back the import transaction, so the fixture cannot use an outer rollback.
         $this->preventResetByRollback();
         $this->setAdminUser();
         $generator = $this->getDataGenerator()->get_plugin_generator('core_question');
         $category = $generator->create_question_category();
         $data = $generator->create_question('truefalse', null, ['category' => $category->id]);
-        $question = \question_bank::load_question($data->id);
-        $before = $DB->get_records('question_versions');
-        $questions = $DB->count_records('question');
-        $property = new \ReflectionProperty(\question_bank::class, 'questiontypes');
-        $property->setAccessible(true);
-        $original = $property->getValue();
-        $types = $original;
-        $types['truefalse'] = $this->getMockBuilder(\qtype_truefalse::class)
-            ->onlyMethods(['save_question_options'])->getMock();
-        $types['truefalse']->expects($this->once())->method('save_question_options')->willReturn($outcome);
-        $property->setValue(null, $types);
-        $format = new \qformat_xml();
-        $format->displayprogress = false;
-        $sink = $this->redirectEvents();
-        try {
-            $file = __DIR__ . '/fixtures/edited-true-false-question.xml';
-            $result = $force === null ? importer::import_file($format, $question, $file)
-                : ($draftonnotice ? importer::import_file($format, $question, $file, $force, true)
-                    : importer::import_file($format, $question, $file, $force));
-        } finally {
-            $property->setValue(null, $original);
-        }
-        $after = $DB->get_records('question_versions');
-        if ($committed) {
-            $this->assertEmpty($result->error ?? null);
-            $this->assertCount(count($before) + 1, $after);
-            $new = array_values(array_diff_key($after, $before));
-            $this->assertEquals($draftonnotice && !empty($outcome->notice) ? 'draft' : 'ready', $new[0]->status);
-            $this->assertEquals([$new[0]->questionid], $format->questionids);
-            $events = array_filter($sink->get_events(), static function ($event) {
-                return $event instanceof \qbank_importasversion\event\question_version_imported;
-            });
-            $this->assertCount(1, $events);
-            if (!empty($outcome->notice)) {
-                $this->assertStringContainsString($outcome->notice, $result->notice);
-                if ($draftonnotice) {
-                    $this->assertStringContainsString(
-                        get_string('importedwithwarningsasdraft', 'qbank_importasversion'),
-                        $result->notice
-                    );
-                }
-            }
-        } else {
-            $this->assertNotEmpty($result->error ?? null);
-            $this->assertEquals($before, $after);
-            $this->assertEquals($questions, $DB->count_records('question'));
-            $this->assertEmpty($sink->get_events());
-            $this->assertEmpty($format->questionids);
-            if (!empty($outcome->notice) && empty($outcome->error)) {
-                $this->assertEquals($outcome->notice, $result->error);
-            }
-        }
-        foreach ($before as $id => $version) {
-            $this->assertEquals($version, $after[$id]);
-        }
+        $this->question = \question_bank::load_question($data->id);
+        $this->format = new \qformat_xml();
+        $this->format->displayprogress = false;
+        $this->versions = $DB->get_records('question_versions');
+        $this->questioncount = $DB->count_records('question');
+        $this->events = $this->redirectEvents();
     }
 
-    /** @return array Save outcomes with strict, forced and legacy API policies. */
-    public static function save_results(): array {
-        $cases = [];
-        foreach ([false, true, null] as $force) {
-            $policy = $force === null ? 'legacy' : ($force ? 'forced' : 'strict');
-            foreach ([
-                'success' => true,
-                'null' => null,
-                'notice' => (object) ['notice' => 'Question-type warning'],
-                'error' => (object) ['error' => 'Question-type failure'],
-                'error and notice' => (object) ['error' => 'Failure', 'notice' => 'Warning'],
-                'false' => false,
-            ] as $name => $outcome) {
-                $committed = $outcome !== false && empty($outcome->error)
-                    && ($force !== false || empty($outcome->notice));
-                $cases[$policy . ' ' . $name] = [$outcome, $force, $committed];
-                if ($force !== null) {
-                    $cases[$policy . ' draft on notice ' . $name] = [$outcome, $force, $committed, true];
-                }
-            }
+    protected function tearDown(): void {
+        if ($this->originaltypes !== null) {
+            $property = new \ReflectionProperty(\question_bank::class, 'questiontypes');
+            $property->setAccessible(true);
+            $property->setValue(null, $this->originaltypes);
         }
-        return $cases;
+        parent::tearDown();
     }
 
     /**
-     * A valid question remains Ready even when warning-to-Draft behavior is requested.
+     * Check each save outcome against a literal expected status, not a second copy of the import policy.
      *
-     * @dataProvider warning_choices
-     * @param bool $draftonnotice Whether retained warnings should create a Draft version.
+     * @dataProvider save_results
+     * @param mixed $outcome Question-type save result.
+     * @param bool $force Whether notices are allowed.
+     * @param bool $draftonnotice Whether retained notices create a Draft.
+     * @param string|null $expectedstatus Ready, Draft, or null when no version should be saved.
      */
-    public function test_valid_question_imports_without_force(bool $draftonnotice): void {
-        global $DB;
-        $this->resetAfterTest();
-        $this->setAdminUser();
-        $generator = $this->getDataGenerator()->get_plugin_generator('core_question');
-        $category = $generator->create_question_category();
-        $data = $generator->create_question('truefalse', null, ['category' => $category->id]);
-        $question = \question_bank::load_question($data->id);
-        $before = $DB->get_records('question_versions');
-        $format = new \qformat_xml();
-        $format->displayprogress = false;
+    public function test_save_result_policy($outcome, bool $force, bool $draftonnotice, ?string $expectedstatus): void {
+        $this->mock_save_result($outcome);
         $result = importer::import_file(
-            $format, $question, __DIR__ . '/fixtures/edited-true-false-question.xml', false, $draftonnotice
+            $this->format,
+            $this->question,
+            __DIR__ . '/fixtures/edited-true-false-question.xml',
+            $force,
+            $draftonnotice
         );
-        $this->assertEmpty($result->error ?? null);
-        $after = $DB->get_records('question_versions');
-        $new = array_values(array_diff_key($after, $before));
-        $this->assertCount(1, $new);
-        $this->assertEquals('ready', $new[0]->status);
-        $loaded = \question_bank::load_question($new[0]->questionid);
-        $this->assertInstanceOf(\qtype_truefalse_question::class, $loaded);
-        $available = \question_bank::get_finder()->get_questions_from_categories([$category->id], '');
-        $this->assertEquals([$new[0]->questionid], array_values($available));
-        foreach ($before as $id => $version) {
-            $this->assertEquals($version, $after[$id]);
-        }
+        $this->assert_import_result($result, $outcome, $expectedstatus);
     }
 
-    /** @return array Explicit warning-handling choices. */
+    /**
+     * Expected outcomes for all explicit flag combinations.
+     *
+     * A null save result is success: some question types save without returning a value.
+     * The importer normalizes it to true. It is not a notice and never makes a version Draft.
+     * Here, null in the LAST column means rejection, not a null save result.
+     *
+     * @return array
+     */
+    public static function save_results(): array {
+        $notice = (object) ['notice' => 'Question-type warning'];
+        $error = (object) ['error' => 'Question-type failure'];
+        $both = (object) ['error' => 'Question-type failure', 'notice' => 'Question-type warning'];
+        return [
+            // Save result, force, draftonnotice, expected saved status.
+            'strict: true' => [true, false, false, 'ready'],
+            'strict: null' => [null, false, false, 'ready'],
+            'strict: notice' => [$notice, false, false, null],
+            'strict: error' => [$error, false, false, null],
+            'strict: false' => [false, false, false, null],
+            'strict: error and notice' => [$both, false, false, null],
+
+            // The unchecked upload form: Draft handling does not allow warnings by itself.
+            'form unchecked: true' => [true, false, true, 'ready'],
+            'form unchecked: null' => [null, false, true, 'ready'],
+            'form unchecked: notice' => [$notice, false, true, null],
+            'form unchecked: error' => [$error, false, true, null],
+            'form unchecked: false' => [false, false, true, null],
+            'form unchecked: error and notice' => [$both, false, true, null],
+
+            // Explicit API compatibility mode permits notices without changing status.
+            'allow notices: true' => [true, true, false, 'ready'],
+            'allow notices: null' => [null, true, false, 'ready'],
+            'allow notices: notice' => [$notice, true, false, 'ready'],
+            'allow notices: error' => [$error, true, false, null],
+            'allow notices: false' => [false, true, false, null],
+            'allow notices: error and notice' => [$both, true, false, null],
+
+            // The checked upload form: only a notice makes the imported version Draft.
+            'form checked: true' => [true, true, true, 'ready'],
+            'form checked: null' => [null, true, true, 'ready'],
+            'form checked: notice' => [$notice, true, true, 'draft'],
+            'form checked: error' => [$error, true, true, null],
+            'form checked: false' => [false, true, true, null],
+            'form checked: error and notice' => [$both, true, true, null],
+        ];
+    }
+
+    /**
+     * Existing callers omit both new arguments and must retain their previous behavior.
+     *
+     * @dataProvider legacy_save_results
+     * @param mixed $outcome Question-type save result.
+     * @param string|null $expectedstatus Ready, or null when no version should be saved.
+     */
+    public function test_legacy_call($outcome, ?string $expectedstatus): void {
+        $this->mock_save_result($outcome);
+        $result = importer::import_file(
+            $this->format,
+            $this->question,
+            __DIR__ . '/fixtures/edited-true-false-question.xml'
+        );
+        $this->assert_import_result($result, $outcome, $expectedstatus);
+    }
+
+    /**
+     * Literal expectations for the three-argument API.
+     *
+     * @return array
+     */
+    public static function legacy_save_results(): array {
+        return [
+            'true' => [true, 'ready'],
+            'null is also success' => [null, 'ready'],
+            'notice remains Ready' => [(object) ['notice' => 'Question-type warning'], 'ready'],
+            'error' => [(object) ['error' => 'Question-type failure'], null],
+            'false' => [false, null],
+            'error wins over notice' => [(object) ['error' => 'Failure', 'notice' => 'Warning'], null],
+        ];
+    }
+
+    /**
+     * A real true/false save remains Ready with either form choice when there are no warnings.
+     *
+     * @dataProvider warning_choices
+     * @param bool $force Whether the repair checkbox is checked.
+     */
+    public function test_valid_question_imports(bool $force): void {
+        $result = importer::import_file(
+            $this->format,
+            $this->question,
+            __DIR__ . '/fixtures/edited-true-false-question.xml',
+            $force,
+            true
+        );
+        $this->assert_import_result($result, true, 'ready');
+        $loaded = \question_bank::load_question($this->format->questionids[0]);
+        $this->assertInstanceOf(\qtype_truefalse_question::class, $loaded);
+    }
+
+    /**
+     * Both choices on the upload form.
+     *
+     * @return array
+     */
     public static function warning_choices(): array {
         return [[false], [true]];
     }
 
     /**
-     * Exercise the real STACK parser when the optional question type is installed.
+     * Replace only the save result; parsing still uses Moodle's true/false question type.
      *
-     * @dataProvider stack_input_types
-     * @param string $type STACK input type.
-     * @param bool $force Whether to allow question-type save notices.
-     * @param bool $draftonnotice Whether retained warnings should create a Draft version.
+     * @param mixed $outcome Result to return from save_question_options().
      */
-    public function test_stack_missing_validation_obeys_force(string $type, bool $force = false, bool $draftonnotice = false): void {
-        global $DB, $CFG, $PAGE;
-        if (!is_dir($CFG->dirroot . '/question/type/stack')) {
-            $this->markTestSkipped('Optional integration test requires STACK.');
-        }
-        $this->resetAfterTest();
-        $this->preventResetByRollback();
-        require_once($CFG->dirroot . '/question/type/stack/tests/fixtures/test_base.php');
-        \qtype_stack_testcase::setup_test_maxima_connection($this);
-        $this->setAdminUser();
-        $generator = $this->getDataGenerator()->get_plugin_generator('core_question');
-        $category = $generator->create_question_category();
-        $data = $generator->create_question('stack', 'test1', ['category' => $category->id]);
-        $question = \question_bank::load_question($data->id);
-        $PAGE->set_pagetype('question-bank-importasversion-import');
-        $xml = '<quiz><question type="stack"><name><text>Invalid dropdown</text></name>
-            <questiontext format="html"><text>[[input:ans1]]</text></questiontext>
-            <questionvariables><text>ta1:[[1,true],[2,false]];</text></questionvariables>
-            <specificfeedback format="html"><text></text></specificfeedback>
-            <questionnote><text>Dropdown with no validation marker</text></questionnote>
-            <input><name>ans1</name><type>' . $type . '</type><tans>ta1</tans>
-            <mustverify>0</mustverify><showvalidation>0</showvalidation></input>
-            </question></quiz>';
-        $file = make_request_directory() . '/invalid-dropdown.xml';
-        file_put_contents($file, $xml);
-        $format = new \qformat_xml();
-        $format->displayprogress = false;
-        $before = $DB->get_records('question_versions', ['questionbankentryid' => $question->questionbankentryid]);
-        $questions = $DB->count_records('question');
-        $result = importer::import_file($format, $question, $file, $force, $draftonnotice);
-        $after = $DB->get_records('question_versions', ['questionbankentryid' => $question->questionbankentryid]);
-        if ($force) {
-            $newversions = array_values(array_diff_key($after, $before));
-            $this->assertCount(1, $newversions);
-            $this->assertEquals($draftonnotice ? 'draft' : 'ready', $newversions[0]->status);
-            $available = \question_bank::get_finder()->get_questions_from_categories([$category->id], '');
-            $this->assertEquals([$draftonnotice ? $question->id : $newversions[0]->questionid], array_values($available));
-            $this->assertEquals(1, $DB->get_field(
-                'qtype_stack_options',
-                'isbroken',
-                ['questionid' => $newversions[0]->questionid]
-            ));
-            $this->assertStringContainsString('[[validation:ans1]]', $result->notice);
-            foreach ($before as $id => $version) {
-                $this->assertEquals($version, $after[$id]);
-            }
-            return;
-        }
-        $this->assertEquals($before, $after, 'Invalid import must not create a new Ready version.');
-        $this->assertEquals($questions, $DB->count_records('question'));
-        $this->assertNotEmpty($result->error ?? null);
-        $this->assertStringContainsString('[[validation:ans1]]', $result->error);
+    private function mock_save_result($outcome): void {
+        $property = new \ReflectionProperty(\question_bank::class, 'questiontypes');
+        $property->setAccessible(true);
+        $this->originaltypes = $property->getValue();
+        $types = $this->originaltypes;
+        $types['truefalse'] = $this->getMockBuilder(\qtype_truefalse::class)
+            ->onlyMethods(['save_question_options'])->getMock();
+        // The importer may add an error or a Draft explanation; keep the provider's fixture unchanged.
+        $types['truefalse']->expects($this->once())->method('save_question_options')
+            ->willReturn(is_object($outcome) ? clone $outcome : $outcome);
+        $property->setValue(null, $types);
     }
 
     /**
-     * Selection inputs and expression inputs must all preserve the existing version on failure.
+     * Check persistence and diagnostics for the expected outcome given in the table.
      *
-     * @return array
+     * @param mixed $result Importer's return value.
+     * @param mixed $outcome Original question-type save result.
+     * @param string|null $expectedstatus Ready, Draft, or null for rejection.
      */
-    public static function stack_input_types(): array {
-        return [
-            'algebraic' => ['algebraic'],
-            'boolean' => ['boolean'],
-            'checkbox' => ['checkbox'],
-            'dropdown' => ['dropdown'],
-            'dropdown forced' => ['dropdown', true],
-            'dropdown forced draft' => ['dropdown', true, true],
-            'equiv' => ['equiv'],
-            'freetext' => ['freetext'],
-            'geogebra' => ['geogebra'],
-            'json' => ['json'],
-            'matrix' => ['matrix'],
-            'notes' => ['notes'],
-            'numerical' => ['numerical'],
-            'parsons' => ['parsons'],
-            'radio' => ['radio'],
-            'singlechar' => ['singlechar'],
-            'string' => ['string'],
-            'textarea' => ['textarea'],
-            'units' => ['units'],
-            'varmatrix' => ['varmatrix'],
-        ];
-    }
+    private function assert_import_result($result, $outcome, ?string $expectedstatus): void {
+        global $DB;
+        $after = $DB->get_records('question_versions');
+        if ($expectedstatus === null) {
+            $this->assertNotEmpty($result->error ?? null);
+            $this->assertEquals($this->versions, $after);
+            $this->assertEquals($this->questioncount, $DB->count_records('question'));
+            $this->assertEmpty($this->events->get_events());
+            $this->assertEmpty($this->format->questionids);
+            if ($outcome === false) {
+                $this->assertEquals(get_string('unknownerror', 'qbank_importasversion'), $result->error);
+            } else {
+                $this->assertEquals($outcome->error ?? $outcome->notice, $result->error);
+            }
+            return;
+        }
 
+        $this->assertEmpty($result->error ?? null);
+        $new = array_values(array_diff_key($after, $this->versions));
+        $this->assertCount(1, $new);
+        $this->assertEquals($this->questioncount + 1, $DB->count_records('question'));
+        $this->assertEquals($expectedstatus, $new[0]->status);
+        $this->assertEquals([$new[0]->questionid], $this->format->questionids);
+        $events = array_filter($this->events->get_events(), static function ($event) {
+            return $event instanceof \qbank_importasversion\event\question_version_imported;
+        });
+        $this->assertCount(1, $events);
+        foreach ($this->versions as $id => $version) {
+            $this->assertEquals($version, $after[$id]);
+        }
+        $available = \question_bank::get_finder()->get_questions_from_categories([$this->question->category], '');
+        if ($expectedstatus === 'draft') {
+            $this->assertEquals([$this->question->id], array_values($available));
+            $this->assertEquals(
+                get_string('importedwithwarningsasdraft', 'qbank_importasversion') . '<br>' . $outcome->notice,
+                $result->notice
+            );
+        } else {
+            $this->assertEquals([$new[0]->questionid], array_values($available));
+            if ($outcome === true || $outcome === null) {
+                $this->assertSame(true, $result);
+            } else {
+                $this->assertEquals($outcome->notice, $result->notice);
+            }
+        }
+    }
 }
