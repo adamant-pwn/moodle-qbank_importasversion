@@ -267,7 +267,8 @@ final class importer_test extends \advanced_testcase {
                 $result->notice
             );
         } else {
-            $this->assertEquals([$new[0]->questionid], array_values($available));
+            // Moodle 4.0 also returns older Ready versions; the new version must be available in either case.
+            $this->assertContains($new[0]->questionid, $available);
             if ($outcome === true || $outcome === null) {
                 $this->assertSame(true, $result);
             } else {
