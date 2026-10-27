@@ -25,6 +25,17 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+$string['bulkambiguous'] = 'More than one question in this question bank has this ID number.';
+$string['bulkduplicateinfile'] = 'This ID number occurs more than once in the file.';
+$string['bulkfailed'] = 'Failed';
+$string['bulkimport'] = 'Import new versions in bulk';
+$string['bulkimported'] = 'New version';
+$string['bulkimportintro'] = 'Each question in the file becomes a new version of the question with the same ID number in this question bank. Questions without such a match are skipped; use the normal import to add new questions.';
+$string['bulknoidnumber'] = 'The question in the file has no ID number.';
+$string['bulknopermission'] = 'You may not edit the existing question.';
+$string['bulknotfound'] = 'No question in this question bank has this ID number.';
+$string['bulkskipped'] = 'Skipped';
+$string['bulktypemismatch'] = 'The existing question has another question type.';
 $string['event:question_version_imported'] = 'Question version imported';
 $string['forceimport'] = 'Import with warnings as Draft';
 $string['forceimport_help'] = 'By default, question-type save warnings stop this upload. Enable this option to retain a version with warnings as Draft for review or repair, leaving existing versions unchanged. Imports without warnings are still saved as Ready. Save errors cannot be overridden.';
